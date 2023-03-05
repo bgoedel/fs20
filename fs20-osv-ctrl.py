@@ -462,9 +462,9 @@ if __name__ == '__main__':
         Event(
             name="Sonnenaufgang",
             occasionFn=sunEvents.getSunrise,
-            timedelta=datetime.timedelta(hours=1, minutes=45),
-            earliest=datetime.time(hour=5, minute=15),  # Sommerzeit: 7:15, Normalzeit: 6:15
-            latest=datetime.time(hour=7),  # Sommerzeit: 9:00, Normalzeit: 8:00
+            timedelta=datetime.timedelta(hours=0, minutes=45),
+            earliest=datetime.time(hour=4, minute=15),  # Sommerzeit: 6:15, Normalzeit: 5:15
+            latest=datetime.time(hour=6),  # Sommerzeit: 8:00, Normalzeit: 7:00
             execFn=controller.morning,
             parameter=("F404B8111", "F404B8211", "F404B8611", "F404B8711", "F404B8811", "F404B8911"),
             logger=logger
@@ -557,7 +557,7 @@ if __name__ == '__main__':
         Event(
             name="Nachts",
             occasionFn=sunEvents.getSunset,
-            timedelta=datetime.timedelta(minutes=45),
+            timedelta=datetime.timedelta(minutes=-15),
             earliest=datetime.time(hour=16),  # Sommerzeit: 18:00
             latest=datetime.time(hour=20),  # Sommerzeit: 22:00
             execFn=controller.night,
