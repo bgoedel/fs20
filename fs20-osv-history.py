@@ -161,7 +161,7 @@ class DataObject(object):
     def write(self, data):
         self.fileWriter.write(data)
         data["room"] = self.name
-        data["time"] = time.time()
+        data["time"] = time.strftime("%Y-%m-%d %H:%M:%S")
         self.dataServer.write(json.JSONEncoder().encode(data))
 
     def stop(self):
