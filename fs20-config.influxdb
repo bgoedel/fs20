@@ -1,0 +1,7 @@
+bucket: test
+url: http://192.168.193.1:8086
+token: vIhg1a_OuXOse2qnI2NqWpTIEukWiiUtVYjGIqMWtaGU4wq2edfmwpeAvRKLYm6hrYfh_vsGGHfVZQHvlWJQ8Q==
+org: osv
+measurement: house
+tagname: entity
+sources: {"fs20": "192.168.193.1:9990"}
