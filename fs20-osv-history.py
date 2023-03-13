@@ -161,6 +161,7 @@ class DataObject(object):
     def write(self, data):
         self.fileWriter.write(data)
         data["room"] = self.name
+        data["time"] = time.time()
         self.dataServer.write(json.JSONEncoder().encode(data))
 
     def stop(self):
@@ -251,7 +252,7 @@ class TcpServer(threading.Thread):
         socketsToRemove = []
         for clientsocket in self.connections:
             try:
-                clientsocket.send(data.encode("utf-8"))
+                clientsocket.send(("%s\n" % data).encode("utf-8"))
             except Exception as exc:
                 print("Exception %s when writing to %s" % (exc, clientsocket))
                 socketsToRemove.append(clientsocket)
