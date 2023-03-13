@@ -6,6 +6,7 @@ import threading
 import time
 import os
 import sys
+import json
 
 
 class Logger(object):
@@ -114,12 +115,13 @@ class Fs20Receiver(threading.Thread):
         for handler in self.fs20handler.values():
             handler.stop()
 
-    def register(self, telegrams, handler):
-        if type(telegrams) == tuple:
-            for telegram in telegrams:
-                self.fs20handler[telegram] = handler
-        else:
-            self.fs20handler[telegrams] = handler
+    def register(self, telegram, handler):
+        if telegram.startswith("K"):
+            #"K31" -> "KB1" (0x31 + 0x80 = 0xB1)
+            i = int(telegram[1:], 16)
+            j = i + 0x80
+            self.fs20handler["K%02X" % j] = handler
+        self.fs20handler[telegram] = handler
 
     def log(self, logStr):
         print(logStr)
@@ -146,33 +148,39 @@ class FileWriter(object):
 
 
 class DataObject(object):
-    def __init__(self, name, logger):
+    def __init__(self, name, dataServer, logger):
         self.name = name
         self.logger = logger
         self.fileWriter = FileWriter("/tmp/fs20", name)
+        self.dataServer = dataServer
 
     def log(self, logStr):
         print(logStr)
         self.logger.log("%s: " % self.name + logStr)
+
+    def write(self, data):
+        self.fileWriter.write(data)
+        data["room"] = self.name
+        self.dataServer.write(json.JSONEncoder().encode(data))
 
     def stop(self):
         pass
 
 
 class S300TH(DataObject):
-    def __init__(self, name, logger):
-        super(S300TH, self).__init__(name, logger)
+    def __init__(self, name, dataServer, logger):
+        super(S300TH, self).__init__(name, dataServer, logger)
 
     def handle(self, telegram):
         if (len(telegram) != 9):
-            self.log("wrong length: '%s'" % telegram)
+            self.log("%s: wrong length: '%s'" % (self.name, telegram))
             return
         try:
             temp, hum = self.convert(telegram)
-            self.fileWriter.write({"temperature": temp, "humidity": hum})
-            self.log("%4.1f°C, %4.1f%%" % (temp, hum))
+            self.write({"temperature": temp, "humidity": hum})
+            self.log("%s: %4.1f°C, %4.1f%%" % (self.name, temp, hum))
         except ConvertException as exc:
-            self.log("cannot convert K-telegram '%s': %s" % (telegram, exc))
+            self.log("%s: cannot convert K-telegram '%s': %s" % (self.name, telegram, exc))
 
     def convert(self, telegram):
         if len(telegram) == 9:
@@ -181,25 +189,25 @@ class S300TH(DataObject):
             humidity = float("%c%c.%c" % (telegram[7], telegram[8], telegram[5]))  # hum  in %
             return temperature, humidity
         else:
-            self.log("cannot convert, len=%d, telegram='%s'" % (len(telegram), telegram))
-            raise ConvertException("cannot convert, len=%d, telegram='%s'" % (len(telegram), telegram))
+            self.log("%s: cannot convert, len=%d, telegram='%s'" % (self.name, len(telegram), telegram))
+            raise ConvertException("%s: cannot convert, len=%d, telegram='%s'" % (self.name, len(telegram), telegram))
 
 
 class HMS100T(DataObject):
-    def __init__(self, name, logger):
-        super(HMS100T, self).__init__(name, logger)
+    def __init__(self, name, dataServer, logger):
+        super(HMS100T, self).__init__(name, dataServer, logger)
 
     def handle(self, telegram):
         try:
             temp, hum, status = self.convert(telegram)
             if (hum == 0):
-                self.log("%4.1f°C, 0x%02X" % (temp, status))
-                self.fileWriter.write({"temperature": temp})
+                self.log("%s: %4.1f°C, 0x%02X" % (self.name, temp, status))
+                self.write({"temperature": temp})
             else:
-                self.log("%4.1f°C, %4.1f%%, 0x%02X" % (temp, hum, status))
-                self.fileWriter.write({"temperature": temp, "humidity": hum})
+                self.log("%s: %4.1f°C, %4.1f%%, 0x%02X" % (self.name, temp, hum, status))
+                self.write({"temperature": temp, "humidity": hum})
         except ConvertException as exc:
-            self.log("cannot convert H-telegram '%s': %s" % (telegram, exc))
+            self.log("%s: cannot convert H-telegram '%s': %s" % (self.name, telegram, exc))
 
     def convert(self, telegram):
         # "H155601150100"
@@ -210,8 +218,8 @@ class HMS100T(DataObject):
             status = int("%c%c" % (telegram[5], telegram[6]))  # status
             return temperature, humidity, status
         else:
-            self.log("cannot convert, len=%d, telegram='%s'" % (len(telegram), telegram))
-            raise ConvertException("cannot convert, len=%d, telegram='%s'" % (len(telegram), telegram))
+            self.log("%s: cannot convert, len=%d, telegram='%s'" % (self.name, len(telegram), telegram))
+            raise ConvertException("%s: cannot convert, len=%d, telegram='%s'" % (self.name, len(telegram), telegram))
 
 
 class ConvertException(Exception):
@@ -222,30 +230,87 @@ class ConvertException(Exception):
         return repr(self.value)
 
 
+class TcpServer(threading.Thread):
+    def __init__(self, tcpPort):
+        super().__init__()
+        self.connections = []
+        self.tcpPort = tcpPort
+
+    def run(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("", self.tcpPort))
+        s.listen()
+        while True:
+            # accept connections from outside
+            (clientsocket, address) = s.accept()
+            self.connections.append(clientsocket)
+            print("new connection: %s" % clientsocket)
+
+    def write(self, data):
+        socketsToRemove = []
+        for clientsocket in self.connections:
+            try:
+                clientsocket.send(data.encode("utf-8"))
+            except Exception as exc:
+                print("Exception %s when writing to %s" % (exc, clientsocket))
+                socketsToRemove.append(clientsocket)
+        for socketToRemove in socketsToRemove:
+            self.connections.remove(socketToRemove)
+            print("removing connection %s" % socketToRemove)
+
+
+class Config(object):
+    def __init__(self, configFilename):
+        self.configFilename = configFilename
+        self.sources = None
+
+    def read(self):
+        f = open(self.configFilename, "r")
+        lines = f.readlines()
+        f.close()
+        for line in lines:
+            k, v = line.split(":", 1)
+            k = k.strip()
+            v = v.strip()
+            if k == "sources":
+                self.sources = v
+
+    def validate(self):
+        if not self.sources:
+            sys.stderr.write("config file must contain 'sources'\n")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: %s <fs20-server>" % sys.argv[0])
-        print("ex:    %s localhost:7890" % sys.argv[0])
+        print("usage: %s <fs20-server> <data-server-port> <config>" % sys.argv[0])
+        print("ex:    %s localhost:7890 9990 config.fs20" % sys.argv[0])
         sys.exit(-1)
 
 for arg in sys.argv:
     print(arg)
 
+fs20Server = sys.argv[1]
+dataServerPort = int(sys.argv[2])
+configFileName = sys.argv[3]
+
 startTime = time.ctime()
 
 logger = Logger("/var/log/fs20/fs20-osv-history")
+
+dataServer = TcpServer(dataServerPort)
+dataServer.start()
+
+config = Config(configFileName)
+
 if not os.path.exists("/tmp/fs20"):
     os.makedirs("/tmp/fs20")
 
-fs20Receiver = Fs20Receiver(sys.argv[1], logger)
+fs20Receiver = Fs20Receiver(fs20Server, logger)
 
-fs20Receiver.register(("K31", "KB1"), S300TH("Aussen", logger))  # telegram = "K31" -> "K31" and "KB1" is ok
-fs20Receiver.register("H9E34", HMS100T("Wohnzimmer", logger))
-fs20Receiver.register("H39BA", HMS100T("Badezimmer", logger))
-fs20Receiver.register("H1556", HMS100T("Schlafzimmer", logger))
-fs20Receiver.register("HF3BF", HMS100T("Florian", logger))
-fs20Receiver.register("H312A", HMS100T("Benjamin", logger))
-fs20Receiver.register("H70A2", HMS100T("Stiegenhaus", logger))
-fs20Receiver.register("HBE63", HMS100T("Dusche", logger))
-
+for roomName, telegramPrefix in config.sources.items():
+    if telegramPrefix.startswith("K"):
+        fs20Receiver.register(telegramPrefix, S300TH(roomName, dataServer, logger))
+    elif telegramPrefix.startswith("H"):
+        fs20Receiver.register(telegramPrefix, HMS100T(roomName, dataServer, logger))
 fs20Receiver.run()
