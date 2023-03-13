@@ -274,7 +274,7 @@ class Config(object):
             k = k.strip()
             v = v.strip()
             if k == "sources":
-                self.sources = v
+                self.sources = json.JSONDecoder().decode(v)
 
     def validate(self):
         if not self.sources:
@@ -302,6 +302,8 @@ dataServer = TcpServer(dataServerPort)
 dataServer.start()
 
 config = Config(configFileName)
+config.read()
+config.validate()
 
 if not os.path.exists("/tmp/fs20"):
     os.makedirs("/tmp/fs20")
